@@ -7,9 +7,33 @@ type ShortenResult = {
   shortUrl: string;
   clickCount: number;
   createdAt: string;
+  isExisting?: boolean;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
+
+async function copyText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error('복사에 실패했습니다. 주소를 직접 선택해서 복사해 주세요.');
+  }
+}
 
 function App() {
   const [longUrl, setLongUrl] = useState('');
@@ -53,6 +77,7 @@ function App() {
 
       setResult(data);
       setLongUrl('');
+      setMessage(data.isExisting ? '이미 등록된 URL이라 기존 단축 주소를 불러왔습니다.' : '');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.');
     } finally {
@@ -82,8 +107,14 @@ function App() {
   async function copyShortUrl() {
     if (!result) return;
 
-    await navigator.clipboard.writeText(result.shortUrl);
-    setIsCopied(true);
+    try {
+      await copyText(result.shortUrl);
+      setIsCopied(true);
+      setMessage('단축 URL을 복사했습니다.');
+    } catch (error) {
+      setIsCopied(false);
+      setMessage(error instanceof Error ? error.message : '복사에 실패했습니다.');
+    }
   }
 
   return (
@@ -92,13 +123,10 @@ function App() {
         <div className="intro">
           <p className="eyebrow">Supabase 기반 방문 통계 서비스</p>
           <h1>나만의 단축 URL 생성기</h1>
-          <p className="lead">
-            긴 주소를 6자리 코드로 줄이고, 링크가 열릴 때마다 클릭 수를 데이터베이스에 누적합니다.
-          </p>
         </div>
 
         <form className="shorten-form" onSubmit={handleSubmit}>
-          <label htmlFor="longUrl">긴 URL</label>
+          <label htmlFor="longUrl">단축할 URL을 입력하세요.</label>
           <div className="input-row">
             <input
               id="longUrl"

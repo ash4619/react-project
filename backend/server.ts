@@ -53,8 +53,46 @@ function getParam(value: string | string[]) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function toResponse(data: UrlRecord, isExisting?: boolean) {
+  return {
+    originalUrl: data.original_url,
+    shortCode: data.short_code,
+    shortUrl: `${PUBLIC_BASE_URL}/${data.short_code}`,
+    clickCount: data.click_count ?? 0,
+    createdAt: data.created_at,
+    isExisting,
+  };
+}
+
 async function findByCode(shortCode: string) {
   return supabase.from('urls').select('*').eq('short_code', shortCode).single<UrlRecord>();
+}
+
+async function findByOriginalUrl(originalUrl: string) {
+  return supabase
+    .from('urls')
+    .select('*')
+    .eq('original_url', originalUrl)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle<UrlRecord>();
+}
+
+async function incrementClickCount(shortCode: string, currentCount: number) {
+  const rpcResult = await supabase
+    .rpc('increment_click_count', { code_to_increment: shortCode })
+    .maybeSingle<UrlRecord>();
+
+  if (!rpcResult.error) {
+    return rpcResult;
+  }
+
+  return supabase
+    .from('urls')
+    .update({ click_count: currentCount + 1 })
+    .eq('short_code', shortCode)
+    .select('*')
+    .single<UrlRecord>();
 }
 
 async function createUniqueCode() {
@@ -86,6 +124,16 @@ app.post('/api/shorten', async (req: Request, res: Response) => {
   }
 
   try {
+    const { data: existingUrl, error: lookupError } = await findByOriginalUrl(originalUrl);
+
+    if (lookupError) {
+      throw lookupError;
+    }
+
+    if (existingUrl) {
+      return res.json(toResponse(existingUrl, true));
+    }
+
     const shortCode = await createUniqueCode();
     const { data, error } = await supabase
       .from('urls')
@@ -95,13 +143,7 @@ app.post('/api/shorten', async (req: Request, res: Response) => {
 
     if (error) throw error;
 
-    return res.status(201).json({
-      originalUrl: data.original_url,
-      shortCode: data.short_code,
-      shortUrl: `${PUBLIC_BASE_URL}/${data.short_code}`,
-      clickCount: data.click_count ?? 0,
-      createdAt: data.created_at,
-    });
+    return res.status(201).json(toResponse(data, false));
   } catch (error) {
     console.error('URL creation failed:', error);
     return res.status(500).json({ error: '단축 URL 생성에 실패했습니다.' });
@@ -116,13 +158,7 @@ app.get('/api/urls/:shortCode', async (req: Request, res: Response) => {
       return res.status(404).json({ error: '존재하지 않는 단축 URL입니다.' });
     }
 
-    return res.json({
-      originalUrl: data.original_url,
-      shortCode: data.short_code,
-      shortUrl: `${PUBLIC_BASE_URL}/${data.short_code}`,
-      clickCount: data.click_count ?? 0,
-      createdAt: data.created_at,
-    });
+    return res.json(toResponse(data));
   } catch (error) {
     console.error('URL lookup failed:', error);
     return res.status(500).json({ error: 'URL 정보를 불러오지 못했습니다.' });
@@ -143,10 +179,11 @@ app.get('/:shortCode', async (req: Request, res: Response) => {
       return res.status(404).send('존재하지 않는 단축 URL입니다.');
     }
 
-    await supabase
-      .from('urls')
-      .update({ click_count: (data.click_count ?? 0) + 1 })
-      .eq('short_code', shortCode);
+    const { error: updateError } = await incrementClickCount(shortCode, data.click_count ?? 0);
+
+    if (updateError) {
+      throw updateError;
+    }
 
     return res.redirect(302, data.original_url);
   } catch (error) {

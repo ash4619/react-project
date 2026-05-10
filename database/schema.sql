@@ -7,3 +7,39 @@ create table if not exists public.urls (
 );
 
 create index if not exists urls_short_code_idx on public.urls (short_code);
+
+with duplicate_totals as (
+  select original_url, min(id) as keep_id, sum(click_count) as total_click_count
+  from public.urls
+  group by original_url
+  having count(*) > 1
+),
+merged_duplicates as (
+  update public.urls as target
+  set click_count = duplicate_totals.total_click_count
+  from duplicate_totals
+  where target.id = duplicate_totals.keep_id
+  returning target.original_url, target.id
+)
+delete from public.urls as duplicate
+using merged_duplicates
+where duplicate.original_url = merged_duplicates.original_url
+  and duplicate.id <> merged_duplicates.id;
+
+create unique index if not exists urls_original_url_unique_idx on public.urls (original_url);
+
+create or replace function public.increment_click_count(code_to_increment text)
+returns table (
+  id bigint,
+  original_url text,
+  short_code text,
+  click_count integer,
+  created_at timestamp with time zone
+)
+language sql
+as $$
+  update public.urls
+  set click_count = click_count + 1
+  where short_code = code_to_increment
+  returning urls.id, urls.original_url, urls.short_code, urls.click_count, urls.created_at;
+$$;
